@@ -1,0 +1,611 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  Pipeline creation with all includes resources such as policies, roles, codebuild project, etc.
+  Last updated 08/5/2024 by Fredaljohn Rohrbaugh
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Pipeline Configuration"
+        Parameters:
+          - PipelineName
+          - FullRepositoryId
+          - BranchName
+          - BuildSpecLocation
+      
+      - Label: 
+          default: "Security Groups"
+        Parameters:
+          - SecurityGroupIds
+
+      - Label:
+          default: "Policy ARNs"
+        Parameters:
+          - ECRPolicyConfirm
+          - S3PolicyConfirm
+          - CodeArtifactPolicyConfirm
+
+Parameters:
+  PipelineName:
+    Type: String
+    Description: The name of the pipeline
+    AllowedPattern: "^example_.*"
+    Default: example_fj_ssmtest
+    ConstraintDescription: Must begin with 'example_' #TODO: Potential to add requirement to end in build '^example_.*pipeline$'
+  FullRepositoryId:
+    Type: String
+    Description: The full name of the GitHub repository (e.g. owner/repo)
+    AllowedPattern: "^<your_github_repo>/.*"
+    Default: <your_github_repo>/example_db_api
+    ConstraintDescription: Must begin with '<your_github_repo>/'
+  BranchName:
+    Type: String
+    Description: The name of the branch to use as the source.
+    AllowedValues:
+      - dev
+      - qa
+      - main
+    Default: dev
+    ConstraintDescription: Must be a valid branch name (dev, qa, main)
+  BuildSpecLocation:
+    Type: String
+    Description: The location of the buildspec file in the source repository
+    AllowedPattern: "^.*buildspec_.*.yml$"
+    Default: buildspec_dev_ext_sbx.yml
+    ConstraintDescription: Must be a valid buildspec file (buildspec_dev_ext.yml, buildspec_qa_ext.yml, buildspec_main_ext.yml)
+  ECRPolicyConfirm:
+    Type: String
+    Description: "Confirm ECR Policy is needed"
+    AllowedValues:
+      - "Yes"
+      - "No"
+    Default: "No"
+  S3PolicyConfirm:
+    Type: String
+    Description: "Confirm S3 Policy is needed"
+    AllowedValues:
+      - "Yes"
+      - "No"
+      - "Admin"
+    Default: "No"
+  CodeArtifactPolicyConfirm:
+    Type: String
+    Description: "Confirm CodeArtifact Policy is needed"
+    AllowedValues:
+      - "Yes"
+      - "No"
+      - "Admin"
+    Default: "No"
+
+Conditions:
+  ECRPolicyNeeded: !Equals [!Ref ECRPolicyConfirm, "Yes"]
+  S3PolicyNeeded: !Equals [!Ref S3PolicyConfirm, "Yes"]
+  S3PolicyAdminNeeded: !Equals [!Ref S3PolicyConfirm, "Admin"]
+  CodeArtifactPolicyNeeded: !Equals [!Ref CodeArtifactPolicyConfirm, "Yes"]
+  CodeArtifactPolicyAdminNeeded: !Equals [!Ref CodeArtifactPolicyConfirm, "Admin"]
+  IsQA: !Equals [!Ref BranchName, "qa"]
+  IsMain: !Equals [!Ref BranchName, "main"]
+
+Resources:
+  MyECRRepository: #TODO: Lifecycle policies based on environment(i.e. dev) and permissions based on environment. #TODO: Current setting is keep most recent 5 images, remove the rest. 
+    Type: "AWS::ECR::Repository"
+    Condition: ECRPolicyNeeded
+    Properties:
+      RepositoryName: !Ref PipelineName
+      RepositoryPolicyText: 
+        !If
+          - IsMain #Policy for main branch
+          -
+            Version: "2012-10-17"
+            Statement:
+              - Sid: "CustomerProdOrgAccess"
+                Effect: "Allow"
+                Principal: "*"
+                Action:
+                  - "ecr:BatchGetImage"
+                  - "ecr:GetDownloadUrlForLayer"
+                Condition:
+                  ForAnyValue:StringLike:
+                    aws:PrincipalOrgPaths:
+                    - "<your_org_id>/<aws_org_id>/<aws_account_id>/*"
+                    - "<your_org_id>/<aws_org_id>/<aws_account_id>/*"
+                    - "<your_org_id>/<aws_org_id>/<aws_account_id>/*"
+                    - "<your_org_id>/<aws_org_id>/<aws_account_id>/*"
+                    - "<your_org_id>/<aws_org_id>/<aws_account_id>/*"
+          - !If
+            - IsQA #Policy for QA branch
+            -
+              Version: "2012-10-17"
+              Statement:
+                - Sid: "CustomerProdOrgAccess"
+                  Effect: "Allow"
+                  Principal: "*"
+                  Action:
+                    - "ecr:BatchGetImage"
+                    - "ecr:GetDownloadUrlForLayer"
+                  Condition:
+                    ForAnyValue:StringLike:
+                      aws:PrincipalOrgPaths:
+                        - "<your_org_id>/<aws_org_id>/<aws_account_id>/*"
+                        - "<your_org_id>/<aws_org_id>/<aws_account_id>/*"
+                        - "<your_org_id>/<aws_org_id>/<aws_account_id>/*"     
+            - #Policy for Dev branch
+              Version: "2012-10-17"
+              Statement:
+                - Sid: "CustomerProdOrgAccess"
+                  Effect: "Allow"
+                  Principal: "*"
+                  Action:
+                    - "ecr:BatchGetImage"
+                    - "ecr:GetDownloadUrlForLayer"
+                  Condition:
+                    ForAnyValue:StringLike:
+                      aws:PrincipalOrgPaths:
+                        - "<your_org_id>/<aws_org_id>/<aws_account_id>/*"
+                        - "<your_org_id>/<aws_org_id>/<aws_account_id>/*"
+                        - "<your_org_id>/<aws_org_id>/<aws_account_id>/*"
+                - Sid: "CustomerProdOrgAccess"
+                  Effect: "Allow"
+                  Principal: "*"
+                  Action:
+                    - "ecr:BatchGetImage"
+                    - "ecr:GetDownloadUrlForLayer"
+                  Condition:
+                    StringEquals:
+                      aws:PrincipalAccount:
+                        - "<aws_account_id>"
+                        - "<aws_account_id>"
+                        - "<aws_account_id>"
+                        - "<aws_account_id>"
+                        - "<aws_account_id>"
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last 5 images",
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 5
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+  MyCodePipeline:
+    Type: "AWS::CodePipeline::Pipeline"
+    DependsOn:
+      - CodePipelineRole
+      - MyCodeBuildProject
+    Properties:
+      Name: !Ref PipelineName
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: 1
+              Configuration:
+                ConnectionArn: !Sub '{{resolve:ssm:CodeStarConnection}}'
+                FullRepositoryId: !Ref FullRepositoryId
+                BranchName: !Ref BranchName
+                OutputArtifactFormat: CODE_ZIP
+              OutputArtifacts:
+                - Name: SourceOutput
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: "1"
+                Provider: CodeBuild
+              InputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                ProjectName: !Ref PipelineName
+      ArtifactStore:
+        Type: S3
+        Location: !Sub build-artifacts-${AWS::AccountId}
+      Tags:
+        - Key: Name
+          Value: !Ref PipelineName
+        - Key: Environment
+          Value: !Ref BranchName
+        - Key: ExampleAbbreviation
+          Value: example
+        - Key: Application
+          Value: !Select
+            - 1
+            - !Split
+              - "example_"
+              - !Ref PipelineName
+
+  MyCodePipelinePolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: CodePipelineRole
+    Properties:
+      PolicyName: !Sub "LLCodePipelinePolicy-${PipelineName}"
+      PolicyDocument:
+        Statement:
+          - Action:
+              - iam:PassRole
+            Resource: "*"
+            Effect: Allow
+            Condition:
+              StringEqualsIfExists:
+                iam:PassedToService:
+                  - cloudformation.amazonaws.com
+                  - elasticbeanstalk.amazonaws.com
+                  - ec2.amazonaws.com
+                  - ecs-tasks.amazonaws.com
+          - Action:
+              - codecommit:CancelUploadArchive
+              - codecommit:GetBranch
+              - codecommit:GetCommit
+              - codecommit:GetRepository
+              - codecommit:GetUploadArchiveStatus
+              - codecommit:UploadArchive
+            Resource: "*"
+            Effect: Allow
+          - Action:
+              - codedeploy:CreateDeployment
+              - codedeploy:GetApplication
+              - codedeploy:GetApplicationRevision
+              - codedeploy:GetDeployment
+              - codedeploy:GetDeploymentConfig
+              - codedeploy:RegisterApplicationRevision
+            Resource: "*"
+            Effect: Allow
+          - Action:
+              - codestar-connections:UseConnection
+            Resource: "*"
+            Effect: Allow
+          - Action:
+              - elasticbeanstalk:*
+              - ec2:*
+              - elasticloadbalancing:*
+              - autoscaling:*
+              - cloudwatch:*
+              - s3:*
+              - sns:*
+              - cloudformation:*
+              - rds:*
+              - sqs:*
+              - ecs:*
+            Resource: "*"
+            Effect: Allow
+          - Action:
+              - lambda:InvokeFunction
+              - lambda:ListFunctions
+            Resource: "*"
+            Effect: Allow
+          - Action:
+              - opsworks:CreateDeployment
+              - opsworks:DescribeApps
+              - opsworks:DescribeCommands
+              - opsworks:DescribeDeployments
+              - opsworks:DescribeInstances
+              - opsworks:DescribeStacks
+              - opsworks:UpdateApp
+              - opsworks:UpdateStack
+            Resource: "*"
+            Effect: Allow
+          - Action:
+              - cloudformation:CreateStack
+              - cloudformation:DeleteStack
+              - cloudformation:DescribeStacks
+              - cloudformation:UpdateStack
+              - cloudformation:CreateChangeSet
+              - cloudformation:DeleteChangeSet
+              - cloudformation:DescribeChangeSet
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:SetStackPolicy
+              - cloudformation:ValidateTemplate
+            Resource: "*"
+            Effect: Allow
+          - Action:
+              - codebuild:BatchGetBuilds
+              - codebuild:StartBuild
+              - codebuild:BatchGetBuildBatches
+              - codebuild:StartBuildBatch
+            Resource: "*"
+            Effect: Allow
+          - Effect: Allow
+            Action:
+              - devicefarm:ListProjects
+              - devicefarm:ListDevicePools
+              - devicefarm:GetRun
+              - devicefarm:GetUpload
+              - devicefarm:CreateUpload
+              - devicefarm:ScheduleRun
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - servicecatalog:ListProvisioningArtifacts
+              - servicecatalog:CreateProvisioningArtifact
+              - servicecatalog:DescribeProvisioningArtifact
+              - servicecatalog:DeleteProvisioningArtifact
+              - servicecatalog:UpdateProduct
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - cloudformation:ValidateTemplate
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - ecr:DescribeImages
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - states:DescribeExecution
+              - states:DescribeStateMachine
+              - states:StartExecution
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - appconfig:StartDeployment
+              - appconfig:StopDeployment
+              - appconfig:GetDeployment
+            Resource: "*"
+      Roles:
+        - !Ref CodePipelineRole
+  CodePipelineRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: !Sub "AWSCodePipelineServiceRole-${AWS::Region}-${PipelineName}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AWSCodePipeline_FullAccess"
+      Tags:
+        - Key: Name
+          Value: !Ref PipelineName
+        - Key: Environment
+          Value: !Ref BranchName
+        - Key: ExampleAbbreviation
+          Value: example
+        - Key: Application
+          Value: !Select
+            - 1
+            - !Split
+              - "example_"
+              - !Ref PipelineName
+
+  MyCodeBuildProject:
+    Type: "AWS::CodeBuild::Project"
+    DependsOn:
+      - CodeBuildServiceRole
+      - MyCodeBuildBasePolicy
+      - MyCodeBuildCloudWatchPolicy
+      - MyCodeBuildVpcPolicy
+    Properties:
+      Name: !Ref PipelineName
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
+        PrivilegedMode: true
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: !Ref BuildSpecLocation
+      VpcConfig:
+        VpcId: !Sub '{{resolve:ssm:VpcId}}'
+        Subnets:
+          - !Sub '{{resolve:ssm:SubnetA}}' 
+          - !Sub '{{resolve:ssm:SubnetB}}'
+        SecurityGroupIds: 
+          - '{{resolve:ssm:CodeBuildSg}}'
+      Tags:
+        - Key: Name
+          Value: !Ref PipelineName
+        - Key: Environment
+          Value: !Ref BranchName
+        - Key: ExampleAbbreviation
+          Value: example
+        - Key: Application
+          Value: !Select
+            - 1
+            - !Split
+              - "example_"
+              - !Ref PipelineName
+  CodeBuildServiceRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: !Sub "${PipelineName}-ServiceRole"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: "sts:AssumeRole"
+      ManagedPolicyArns:
+        - !If
+          - ECRPolicyNeeded
+          - "arn:aws:iam::aws:policy/EC2InstanceProfileForImageBuilderECRContainerBuilds"
+          - !Ref "AWS::NoValue"
+        - !If
+          - S3PolicyNeeded
+          - "arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess"
+          - !Ref "AWS::NoValue"
+        - !If
+          - S3PolicyAdminNeeded
+          - "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+          - !Ref "AWS::NoValue"
+        - !If
+          - CodeArtifactPolicyNeeded
+          - "arn:aws:iam::aws:policy/AWSCodeArtifactReadOnlyAccess"
+          - !Ref "AWS::NoValue"
+        - !If
+          - CodeArtifactPolicyAdminNeeded
+          - "arn:aws:iam::aws:policy/AWSCodeArtifactAdminAccess"
+          - !Ref "AWS::NoValue"
+      Path: /
+      Tags:
+        - Key: Name
+          Value: !Ref PipelineName
+        - Key: Environment
+          Value: !Ref BranchName
+        - Key: ExampleAbbreviation
+          Value: example
+        - Key: Application
+          Value: !Select
+            - 1
+            - !Split
+              - "example_"
+              - !Ref PipelineName
+        - !If
+          - ECRPolicyNeeded
+          - Key: ECRPolicy
+            Value: AWS Managed Policy for ECR
+          - Key: ECRPolicyAdded
+            Value: !Ref ECRPolicyConfirm
+        - !If
+          - S3PolicyNeeded
+          - Key: S3Policy
+            Value: AWS Managed Policy for S3
+          - Key: S3PolicyAdded
+            Value: !Ref S3PolicyConfirm
+        - !If
+          - S3PolicyAdminNeeded
+          - Key: S3Policy
+            Value: AWS Managed Policy for S3
+          - Key: S3PolicyAdded
+            Value: !Ref S3PolicyConfirm
+        - !If
+          - CodeArtifactPolicyNeeded
+          - Key: CodeArtifactPolicy
+            Value: AWS Managed Policy for CodeArtifact
+          - Key: CodeArtifactPolicyAdded
+            Value: !Ref CodeArtifactPolicyConfirm
+        - !If
+          - CodeArtifactPolicyAdminNeeded
+          - Key: CodeArtifactPolicy
+            Value: AWS Managed Policy for CodeArtifact
+          - Key: CodeArtifactPolicyAdded
+            Value: !Ref CodeArtifactPolicyConfirm
+
+  MyCodeBuildBasePolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: CodeBuildServiceRole
+    Properties:
+      PolicyName: !Sub "LLCodeBuildBasePolicy-${PipelineName}"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Resource:
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${PipelineName}"
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${PipelineName}:*"
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+          - Effect: Allow
+            Resource:
+              - arn:aws:s3:::codepipeline-us-east-1-*
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+              - s3:GetObjectVersion
+              - s3:GetBucketAcl
+              - s3:GetBucketLocation
+          - Effect: Allow
+            Action:
+              - codebuild:CreateReportGroup
+              - codebuild:CreateReport
+              - codebuild:UpdateReport
+              - codebuild:BatchPutTestCases
+              - codebuild:BatchPutCodeCoverages
+            Resource:
+              - !Sub "arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:report-group/${PipelineName}-*"
+      Roles:
+        - !Ref CodeBuildServiceRole
+  MyCodeBuildCloudWatchPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: CodeBuildServiceRole
+    Properties:
+      PolicyName: !Sub "LLCodeBuildCloudWatchPolicy-${PipelineName}"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Resource:
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/codebuild/${PipelineName}"
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/codebuild/${PipelineName}:*"
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+      Roles:
+        - !Ref CodeBuildServiceRole
+  MyCodeBuildVpcPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: CodeBuildServiceRole
+    Properties:
+      PolicyName: !Sub "LLCodeBuildVpcPolicy-${PipelineName}"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - ec2:CreateNetworkInterface
+              - ec2:DescribeDhcpOptions
+              - ec2:DescribeNetworkInterfaces
+              - ec2:DeleteNetworkInterface
+              - ec2:DescribeSubnets
+              - ec2:DescribeSecurityGroups
+              - ec2:DescribeVpcs
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - ec2:CreateNetworkInterfacePermission
+            Resource: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:network-interface/*
+            Condition:
+              StringEquals:
+                ec2:Subnet:
+                  - !Sub 'arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:subnet/{{resolve:ssm:SubnetA}}'
+                  - !Sub 'arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:subnet/{{resolve:ssm:SubnetB}}'
+                ec2:AuthorizedService: codebuild.amazonaws.com
+      Roles:
+        - !Ref CodeBuildServiceRole
+
+  MyCloudWatchLogGroup:
+    Type: "AWS::Logs::LogGroup"
+    Properties:
+      LogGroupName: !Sub "/codebuild/${PipelineName}"
+      RetentionInDays: 30 #TODO: Potentionally add a parameter to this for adjustability.
+  MyNotificationRule:
+    Type: "AWS::CodeStarNotifications::NotificationRule"
+    Properties:
+      DetailType: "FULL"
+      EventTypeIds:
+        - "codepipeline-pipeline-pipeline-execution-failed"
+        - "codepipeline-pipeline-pipeline-execution-succeeded"
+      Name: !Sub "${PipelineName}_notification"
+      Resource: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${MyCodePipeline}
+      Targets:
+        - TargetType: AWSChatbotSlack
+          TargetAddress: !Sub '{{resolve:ssm:ChatBotConfig}}'
+      Status: "ENABLED"
+    DependsOn:
+      - MyCodePipeline
